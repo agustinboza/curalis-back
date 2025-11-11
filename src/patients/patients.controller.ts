@@ -1,0 +1,23 @@
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { PatientsService } from './patients.service.js';
+import { CreatePatientDto } from './dto/create-patient.dto';
+import { AuthGuard } from '@nestjs/passport';
+import { Roles, Role } from '../auth/decorators/roles.decorator.js';
+import { RolesGuard } from '../auth/guards/roles.guard.js';
+
+@Controller('patients')
+@UseGuards(AuthGuard('cognito'), RolesGuard)
+export class PatientsController {
+  constructor(private readonly patientsService: PatientsService) {}
+
+  @Post()
+  @Roles(Role.DOCTOR)
+  create(@Body() dto: CreatePatientDto) {
+    return this.patientsService.create(dto);
+  }
+
+  @Get(':id')
+  getById(@Param('id') id: string) {
+    return this.patientsService.getById(id);
+  }
+}

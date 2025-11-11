@@ -1,0 +1,76 @@
+version: '3.9'
+
+services:
+  api:
+    build: .
+    container_name: curalis-back
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - PORT=${PORT:-3001}
+      - FHIR_PROVIDER=${FHIR_PROVIDER:-hapi}
+      - FHIR_BASE_URL=${FHIR_BASE_URL:-http://hapifhir:8080/fhir}
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-cognito}
+      - JWT_SECRET=${JWT_SECRET:-changeme}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # Cognito (used when AUTH_PROVIDER=cognito)
+      - COGNITO_REGION=${COGNITO_REGION:-us-east-1}
+      - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID:-}
+      - COGNITO_AUDIENCE=${COGNITO_AUDIENCE:-}
+    ports:
+      - "${API_PORT:-3001}:3001"
+    depends_on:
+      - hapifhir
+
+  hapifhir:
+    image: hapiproject/hapi:latest
+    container_name: hapifhir
+    environment:
+      # Use external Postgres for persistence (uppercase Spring Boot envs)
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://fhirdb:5432/fhirdb
+      - SPRING_DATASOURCE_USERNAME=fhir
+      - SPRING_DATASOURCE_PASSWORD=fhir
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      # Force Hibernate Postgres dialect and enable schema creation
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
+      - SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT=org.hibernate.dialect.PostgreSQLDialect
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      # Disable 60s search-result cache to remove 1-minute lag
+      - HAPI_FHIR_REUSE_CACHED_SEARCH_RESULTS_MILLIS=0
+    ports:
+      - "8080:8080"
+    depends_on:
+      fhirdb:
+        condition: service_healthy
+
+  fhirdb:
+    image: postgres:14
+    container_name: fhirdb
+    environment:
+      - POSTGRES_DB=fhirdb
+      - POSTGRES_USER=fhir
+      - POSTGRES_PASSWORD=fhir
+    volumes:
+      - fhirdb-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fhir -d fhirdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Optional: expose for local inspection
+    # ports:
+    #   - "5433:5432"
+
+networks:
+  default:
+    name: curalis-net
+
+volumes:
+  fhirdb-data:
+
+
