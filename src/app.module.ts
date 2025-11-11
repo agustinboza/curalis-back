@@ -13,6 +13,7 @@ import { ProceduresModule } from './procedures/procedures.module.js';
 import { ExamsModule } from './exams/exams.module.js';
 import { CheckinModule } from './checkin/checkin.module.js';
 import { UsersModule } from './users/users.module.js';
+import { TelehealthModule } from './telehealth/telehealth.module.js';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { UsersModule } from './users/users.module.js';
     ExamsModule,
     CheckinModule,
     UsersModule,
+    TelehealthModule,
   ],
   controllers: [AppController],
   providers: [AppService],
