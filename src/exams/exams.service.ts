@@ -16,14 +16,38 @@ export class ExamsService {
       return (bundle?.entry ?? []).map((e: any) => e.resource).filter((r: any) => (r?.status ?? 'active') === 'active');
     }
     const plan: any = await this.fhir.read('PlanDefinition', procedureTemplateId);
-    const definitionCanonicals: string[] = (plan?.action ?? [])
+    const definitionCanonicals = (plan?.action ?? [])
       .map((a: any) => a.definitionCanonical)
       .filter((v: any) => typeof v === 'string');
     const ids = definitionCanonicals
-      .map((c) => (c.startsWith('ActivityDefinition/') ? c.split('/')[1] : undefined))
+      .map((c: string) => (c.startsWith('ActivityDefinition/') ? c.split('/')[1] : undefined))
       .filter(Boolean) as string[];
-    const templates = await Promise.all(ids.map((id) => this.fhir.read<any>('ActivityDefinition', id)));
-    return templates;
+    return Promise.all(ids.map((id) => this.fhir.read<any>('ActivityDefinition', id)));
+  }
+
+  private createTimingDuration(days?: number) {
+    return days
+      ? {
+          value: days,
+          unit: 'day',
+          system: 'http://unitsofmeasure.org',
+          code: 'd',
+        }
+      : undefined;
+  }
+
+  private createCodeCoding(type?: string) {
+    return type
+      ? {
+          coding: [
+            {
+              system: 'http://example.org/exam-types',
+              code: type,
+              display: type,
+            },
+          ],
+        }
+      : undefined;
   }
 
   createTemplate(dto: CreateExamTemplateDto) {
@@ -33,26 +57,8 @@ export class ExamsService {
       name: dto.name,
       description: dto.description,
       kind: 'ServiceRequest',
-      code: dto.type
-        ? {
-            coding: [
-              {
-                system: 'http://example.org/exam-types',
-                code: dto.type,
-                display: dto.type,
-              },
-            ],
-          }
-        : undefined,
-      // If provided, map default due days to timingDuration on the template
-      timingDuration: dto.defaultDueDays
-        ? {
-            value: dto.defaultDueDays,
-            unit: 'day',
-            system: 'http://unitsofmeasure.org',
-            code: 'd',
-          }
-        : undefined,
+      code: this.createCodeCoding(dto.type),
+      timingDuration: this.createTimingDuration(dto.defaultDueDays),
     };
     return this.fhir.create('ActivityDefinition', activityDefinition);
   }
@@ -67,23 +73,8 @@ export class ExamsService {
       ...existing,
       name: dto.name ?? existing.name,
       description: dto.description ?? existing.description,
-      code:
-        dto.type !== undefined
-          ? {
-              coding: [
-                { system: 'http://example.org/exam-types', code: dto.type, display: dto.type },
-              ],
-            }
-          : existing.code,
-      timingDuration:
-        dto.defaultDueDays !== undefined
-          ? {
-              value: dto.defaultDueDays,
-              unit: 'day',
-              system: 'http://unitsofmeasure.org',
-              code: 'd',
-            }
-          : existing.timingDuration,
+      code: dto.type !== undefined ? this.createCodeCoding(dto.type) : existing.code,
+      timingDuration: dto.defaultDueDays !== undefined ? this.createTimingDuration(dto.defaultDueDays) : existing.timingDuration,
     };
     return this.fhir.update('ActivityDefinition', id, updated);
   }
@@ -180,26 +171,23 @@ export class ExamsService {
     if (filters.status) params['status'] = this.mapClientStatusToFhir(filters.status);
     const bundle: any = await this.fhir.search('ServiceRequest', params);
     const srs = (bundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
-    const hydrated = await Promise.all(srs.map((sr: any) => this.hydrateServiceRequest(sr)));
-    return hydrated;
+    return srs;
   }
 
   async getAssignedById(id: string) {
-    const sr: any = await this.fhir.read('ServiceRequest', id);
-    return this.hydrateServiceRequest(sr);
+    return this.fhir.read('ServiceRequest', id);
   }
 
   async updateAssignedStatus(id: string, dto: UpdateAssignedExamStatusDto) {
     const existing: any = await this.fhir.read('ServiceRequest', id);
     const fhirStatus = this.mapClientStatusToFhir(dto.status);
     const updated: any = { ...existing, status: fhirStatus };
-    const saved: any = await this.fhir.update('ServiceRequest', id, updated);
-    return this.hydrateServiceRequest(saved);
+    return this.fhir.update('ServiceRequest', id, updated);
   }
 
   async uploadResult(serviceRequestId: string, dto: UploadExamResultDto) {
     const sr: any = await this.fhir.read('ServiceRequest', serviceRequestId);
-    const patientRef: string | undefined = sr?.subject?.reference;
+    const patientRef = sr?.subject?.reference;
     const docRef: any = {
       resourceType: 'DocumentReference',
       status: 'current',
@@ -215,70 +203,13 @@ export class ExamsService {
         },
       ],
       context: {
-        related: [ { reference: `ServiceRequest/${serviceRequestId}` } ],
+        related: [{ reference: `ServiceRequest/${serviceRequestId}` }],
       },
     };
     return this.fhir.create('DocumentReference', docRef);
   }
 
   private mapClientStatusToFhir(status: string): string {
-    switch (status) {
-      case 'pending':
-        return 'active';
-      case 'active':
-        return 'active';
-      case 'completed':
-        return 'completed';
-      default:
-        return 'active';
-    }
-  }
-
-  private extractId(ref?: string): string | undefined {
-    if (!ref) return undefined;
-    const parts = ref.split('/');
-    return parts[1];
-  }
-
-  private async hydrateServiceRequest(sr: any) {
-    const templateCanonical: string | undefined = (sr.instantiatesCanonical ?? [])[0];
-    const templateId = templateCanonical?.startsWith('ActivityDefinition/') ? templateCanonical.split('/')[1] : undefined;
-    const template = templateId ? await this.fhir.read<any>('ActivityDefinition', templateId) : undefined;
-
-    const patientId = this.extractId(sr?.subject?.reference);
-    const carePlanId = this.extractId(sr?.basedOn?.[0]?.reference);
-    const type = template?.code?.coding?.[0]?.code || 'other';
-    const status = sr.status === 'completed' ? 'completed' : 'pending';
-
-    const resultsBundle: any = await this.fhir.search('DocumentReference', { related: `ServiceRequest/${sr.id}` } as any);
-    const results = (resultsBundle?.entry ?? [])
-      .map((e: any) => e.resource)
-      .filter(Boolean)
-      .map((doc: any) => {
-        const att = doc?.content?.[0]?.attachment ?? {};
-        return {
-          id: doc.id,
-          examId: sr.id,
-          uploadedAt: doc.date || doc.meta?.lastUpdated,
-          fileUrl: att.url,
-          fileName: att.title,
-          fileType: att.contentType,
-          aiProcessed: false,
-          extractedData: undefined,
-        };
-      });
-
-    return {
-      id: sr.id,
-      patientId,
-      assignedProcedureId: carePlanId,
-      examTemplate: { id: templateId, name: template?.name || 'Exam', type },
-      status,
-      prescriptionUrl: undefined,
-      results,
-      dueDate: sr.occurrenceDateTime,
-    };
+    return status === 'completed' ? 'completed' : 'active';
   }
 }
-
-

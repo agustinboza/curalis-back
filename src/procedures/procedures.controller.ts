@@ -52,7 +52,13 @@ export class ProceduresController {
 
   @Get('assigned')
   listAssigned(@Query('patientId') patientId?: string, @Query('status') status?: string) {
-    return this.proceduresService.listAssigned({ patientId, status }, true).then((data) => ({ success: true, data }));
+    return this.proceduresService.listAssigned({ patientId, status }).then((data) => ({ success: true, data }));
+  }
+
+  @Get('assigned/:id')
+  @Roles(Role.DOCTOR)
+  getAssignedProcedure(@Param('id') id: string) {
+    return this.proceduresService.getCarePlanById(id).then((data) => ({ success: true, data }));
   }
 
   @Get('my-procedures')
@@ -63,12 +69,12 @@ export class ProceduresController {
     const patientId = isPatient && typeof fhirRef === 'string' && fhirRef.startsWith('Patient/')
       ? fhirRef.split('/')[1]
       : undefined;
-    return this.proceduresService.listAssigned({ patientId }, true).then((data) => ({ success: true, data }));
+    return this.proceduresService.listAssigned({ patientId }).then((data) => ({ success: true, data }));
   }
 
   @Get('my-procedures/:id')
   getMyProcedure(@Param('id') id: string) {
-    return this.proceduresService.getHydratedCarePlanById(id).then((data) => ({ success: true, data }));
+    return this.proceduresService.getCarePlanById(id).then((data) => ({ success: true, data }));
   }
 
   @Patch(':id')

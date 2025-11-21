@@ -38,21 +38,8 @@ export class UsersService {
     const bundle: any = await this.fhir.search('Patient', {});
     const resources: any[] = (bundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
     const withSub = resources.filter((p: any) => (p?.identifier || []).some((id: any) => id?.system === 'cognito:user-sub' && id?.value));
-    return withSub.map((p: any) => {
-      const name = p?.name?.[0] || {};
-      return {
-        id: p.id,
-        email: this.pickEmail(p.telecom) || '',
-        firstName: (name.given?.[0] as string) || '',
-        lastName: (name.family as string) || '',
-        role: 'PATIENT',
-        consentStatus: { digitalSignature: false, emailVerified: !!this.pickEmail(p.telecom), isComplete: true },
-        emailVerified: !!this.pickEmail(p.telecom),
-        weight: 0,
-        height: 0,
-        comorbidConditions: [],
-      };
-    });
+    // Return raw FHIR Patient resources
+    return withSub;
   }
 
   async listClinicians() {
