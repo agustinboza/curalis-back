@@ -19,8 +19,8 @@ let ExamsService = class ExamsService {
     }
     async listTemplates(procedureTemplateId) {
         if (!procedureTemplateId) {
-            const bundle = await this.fhir.search('ActivityDefinition', { status: 'active' });
-            return (bundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
+            const bundle = await this.fhir.search('ActivityDefinition', {});
+            return (bundle?.entry ?? []).map((e) => e.resource).filter((r) => (r?.status ?? 'active') === 'active');
         }
         const plan = await this.fhir.read('PlanDefinition', procedureTemplateId);
         const definitionCanonicals = (plan?.action ?? [])
@@ -29,8 +29,30 @@ let ExamsService = class ExamsService {
         const ids = definitionCanonicals
             .map((c) => (c.startsWith('ActivityDefinition/') ? c.split('/')[1] : undefined))
             .filter(Boolean);
-        const templates = await Promise.all(ids.map((id) => this.fhir.read('ActivityDefinition', id)));
-        return templates;
+        return Promise.all(ids.map((id) => this.fhir.read('ActivityDefinition', id)));
+    }
+    createTimingDuration(days) {
+        return days
+            ? {
+                value: days,
+                unit: 'day',
+                system: 'http://unitsofmeasure.org',
+                code: 'd',
+            }
+            : undefined;
+    }
+    createCodeCoding(type) {
+        return type
+            ? {
+                coding: [
+                    {
+                        system: 'http://example.org/exam-types',
+                        code: type,
+                        display: type,
+                    },
+                ],
+            }
+            : undefined;
     }
     createTemplate(dto) {
         const activityDefinition = {
@@ -39,25 +61,8 @@ let ExamsService = class ExamsService {
             name: dto.name,
             description: dto.description,
             kind: 'ServiceRequest',
-            code: dto.type
-                ? {
-                    coding: [
-                        {
-                            system: 'http://example.org/exam-types',
-                            code: dto.type,
-                            display: dto.type,
-                        },
-                    ],
-                }
-                : undefined,
-            timingDuration: dto.defaultDueDays
-                ? {
-                    value: dto.defaultDueDays,
-                    unit: 'day',
-                    system: 'http://unitsofmeasure.org',
-                    code: 'd',
-                }
-                : undefined,
+            code: this.createCodeCoding(dto.type),
+            timingDuration: this.createTimingDuration(dto.defaultDueDays),
         };
         return this.fhir.create('ActivityDefinition', activityDefinition);
     }
@@ -70,25 +75,29 @@ let ExamsService = class ExamsService {
             ...existing,
             name: dto.name ?? existing.name,
             description: dto.description ?? existing.description,
-            code: dto.type !== undefined
-                ? {
-                    coding: [
-                        { system: 'http://example.org/exam-types', code: dto.type, display: dto.type },
-                    ],
-                }
-                : existing.code,
-            timingDuration: dto.defaultDueDays !== undefined
-                ? {
-                    value: dto.defaultDueDays,
-                    unit: 'day',
-                    system: 'http://unitsofmeasure.org',
-                    code: 'd',
-                }
-                : existing.timingDuration,
+            code: dto.type !== undefined ? this.createCodeCoding(dto.type) : existing.code,
+            timingDuration: dto.defaultDueDays !== undefined ? this.createTimingDuration(dto.defaultDueDays) : existing.timingDuration,
         };
         return this.fhir.update('ActivityDefinition', id, updated);
     }
-    deleteTemplate(id) {
+    async deleteTemplate(id) {
+        const canonical = `ActivityDefinition/${id}`;
+        const plansBundle = await this.fhir.search('PlanDefinition', {});
+        const plans = (plansBundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
+        await Promise.all(plans.map(async (plan) => {
+            const actions = Array.isArray(plan?.action) ? plan.action : [];
+            const references = actions.some((a) => a?.definitionCanonical === canonical);
+            if (!references)
+                return;
+            const filtered = actions.filter((a) => a?.definitionCanonical !== canonical);
+            const updated = { ...plan, action: filtered };
+            await this.fhir.update('PlanDefinition', plan.id, updated);
+        }));
+        const srBundle = await this.fhir.search('ServiceRequest', { 'instantiates-canonical': canonical });
+        const srCount = (srBundle?.entry ?? []).length;
+        if (srCount > 0) {
+            throw new common_1.ConflictException('Cannot delete exam template because it is used by assigned exams.');
+        }
         return this.fhir.delete('ActivityDefinition', id);
     }
     async linkTemplateToProcedure(examTemplateId, procedureTemplateId) {
@@ -98,6 +107,9 @@ let ExamsService = class ExamsService {
         const exists = actions.some((a) => a.definitionCanonical === canonical);
         if (!exists) {
             actions.push({ definitionCanonical: canonical });
+        }
+        else {
+            throw new common_1.ConflictException('Exam template already linked to this procedure template');
         }
         const updated = { ...plan, action: actions };
         return this.fhir.update('PlanDefinition', procedureTemplateId, updated);
@@ -151,19 +163,16 @@ let ExamsService = class ExamsService {
             params['status'] = this.mapClientStatusToFhir(filters.status);
         const bundle = await this.fhir.search('ServiceRequest', params);
         const srs = (bundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
-        const hydrated = await Promise.all(srs.map((sr) => this.hydrateServiceRequest(sr)));
-        return hydrated;
+        return srs;
     }
     async getAssignedById(id) {
-        const sr = await this.fhir.read('ServiceRequest', id);
-        return this.hydrateServiceRequest(sr);
+        return this.fhir.read('ServiceRequest', id);
     }
     async updateAssignedStatus(id, dto) {
         const existing = await this.fhir.read('ServiceRequest', id);
         const fhirStatus = this.mapClientStatusToFhir(dto.status);
         const updated = { ...existing, status: fhirStatus };
-        const saved = await this.fhir.update('ServiceRequest', id, updated);
-        return this.hydrateServiceRequest(saved);
+        return this.fhir.update('ServiceRequest', id, updated);
     }
     async uploadResult(serviceRequestId, dto) {
         const sr = await this.fhir.read('ServiceRequest', serviceRequestId);
@@ -189,58 +198,7 @@ let ExamsService = class ExamsService {
         return this.fhir.create('DocumentReference', docRef);
     }
     mapClientStatusToFhir(status) {
-        switch (status) {
-            case 'pending':
-                return 'active';
-            case 'active':
-                return 'active';
-            case 'completed':
-                return 'completed';
-            default:
-                return 'active';
-        }
-    }
-    extractId(ref) {
-        if (!ref)
-            return undefined;
-        const parts = ref.split('/');
-        return parts[1];
-    }
-    async hydrateServiceRequest(sr) {
-        const templateCanonical = (sr.instantiatesCanonical ?? [])[0];
-        const templateId = templateCanonical?.startsWith('ActivityDefinition/') ? templateCanonical.split('/')[1] : undefined;
-        const template = templateId ? await this.fhir.read('ActivityDefinition', templateId) : undefined;
-        const patientId = this.extractId(sr?.subject?.reference);
-        const carePlanId = this.extractId(sr?.basedOn?.[0]?.reference);
-        const type = template?.code?.coding?.[0]?.code || 'other';
-        const status = sr.status === 'completed' ? 'completed' : 'pending';
-        const resultsBundle = await this.fhir.search('DocumentReference', { related: `ServiceRequest/${sr.id}` });
-        const results = (resultsBundle?.entry ?? [])
-            .map((e) => e.resource)
-            .filter(Boolean)
-            .map((doc) => {
-            const att = doc?.content?.[0]?.attachment ?? {};
-            return {
-                id: doc.id,
-                examId: sr.id,
-                uploadedAt: doc.date || doc.meta?.lastUpdated,
-                fileUrl: att.url,
-                fileName: att.title,
-                fileType: att.contentType,
-                aiProcessed: false,
-                extractedData: undefined,
-            };
-        });
-        return {
-            id: sr.id,
-            patientId,
-            assignedProcedureId: carePlanId,
-            examTemplate: { id: templateId, name: template?.name || 'Exam', type },
-            status,
-            prescriptionUrl: undefined,
-            results,
-            dueDate: sr.occurrenceDateTime,
-        };
+        return status === 'completed' ? 'completed' : 'active';
     }
 };
 exports.ExamsService = ExamsService;

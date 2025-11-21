@@ -8,22 +8,7 @@ export declare class UsersService {
     getProfile(identifier: string): Promise<any>;
     updateProfile(identifier: string, fhirRef: string, dto: UpdateProfileDto): Promise<any>;
     private pickEmail;
-    listPatients(): Promise<{
-        id: any;
-        email: string;
-        firstName: string;
-        lastName: string;
-        role: string;
-        consentStatus: {
-            digitalSignature: boolean;
-            emailVerified: boolean;
-            isComplete: boolean;
-        };
-        emailVerified: boolean;
-        weight: number;
-        height: number;
-        comorbidConditions: never[];
-    }[]>;
+    listPatients(): Promise<any[]>;
     listClinicians(): Promise<{
         id: any;
         email: string;

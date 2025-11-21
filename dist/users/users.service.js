@@ -47,21 +47,7 @@ let UsersService = class UsersService {
         const bundle = await this.fhir.search('Patient', {});
         const resources = (bundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
         const withSub = resources.filter((p) => (p?.identifier || []).some((id) => id?.system === 'cognito:user-sub' && id?.value));
-        return withSub.map((p) => {
-            const name = p?.name?.[0] || {};
-            return {
-                id: p.id,
-                email: this.pickEmail(p.telecom) || '',
-                firstName: name.given?.[0] || '',
-                lastName: name.family || '',
-                role: 'PATIENT',
-                consentStatus: { digitalSignature: false, emailVerified: !!this.pickEmail(p.telecom), isComplete: true },
-                emailVerified: !!this.pickEmail(p.telecom),
-                weight: 0,
-                height: 0,
-                comorbidConditions: [],
-            };
-        });
+        return withSub;
     }
     async listClinicians() {
         const bundle = await this.fhir.search('Practitioner', {});

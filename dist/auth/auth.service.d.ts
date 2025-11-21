@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 export declare class AuthService {
     private readonly fhir;
     private readonly config;
+    private readonly logger;
     private cognito;
     private cognitoClientId;
     private cognitoUserPoolId;
@@ -18,7 +19,7 @@ export declare class AuthService {
             email: string;
             firstName: string;
             lastName: string;
-            fhirRef: string | undefined;
+            fhirRef: string;
         };
     }>;
     login(dto: LoginDto): Promise<{

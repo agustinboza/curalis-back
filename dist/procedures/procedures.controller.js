@@ -47,7 +47,10 @@ let ProceduresController = class ProceduresController {
         return this.proceduresService.assignToPatient(dto, authorRef).then((data) => ({ success: true, data }));
     }
     listAssigned(patientId, status) {
-        return this.proceduresService.listAssigned({ patientId, status }, true).then((data) => ({ success: true, data }));
+        return this.proceduresService.listAssigned({ patientId, status }).then((data) => ({ success: true, data }));
+    }
+    getAssignedProcedure(id) {
+        return this.proceduresService.getCarePlanById(id).then((data) => ({ success: true, data }));
     }
     myProcedures(req) {
         const roles = req.user?.roles ?? [];
@@ -56,10 +59,10 @@ let ProceduresController = class ProceduresController {
         const patientId = isPatient && typeof fhirRef === 'string' && fhirRef.startsWith('Patient/')
             ? fhirRef.split('/')[1]
             : undefined;
-        return this.proceduresService.listAssigned({ patientId }, true).then((data) => ({ success: true, data }));
+        return this.proceduresService.listAssigned({ patientId }).then((data) => ({ success: true, data }));
     }
     getMyProcedure(id) {
-        return this.proceduresService.getHydratedCarePlanById(id).then((data) => ({ success: true, data }));
+        return this.proceduresService.getCarePlanById(id).then((data) => ({ success: true, data }));
     }
     versionCarePlan(id, dto) {
         return this.proceduresService.versionCarePlan(id, dto).then((data) => ({ success: true, data }));
@@ -123,6 +126,14 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", void 0)
 ], ProceduresController.prototype, "listAssigned", null);
+__decorate([
+    (0, common_1.Get)('assigned/:id'),
+    (0, roles_decorator_js_1.Roles)(roles_decorator_js_1.Role.DOCTOR),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", void 0)
+], ProceduresController.prototype, "getAssignedProcedure", null);
 __decorate([
     (0, common_1.Get)('my-procedures'),
     __param(0, (0, common_1.Request)()),

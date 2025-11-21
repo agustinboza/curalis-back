@@ -8,6 +8,7 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var AuthService_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthService = void 0;
 const common_1 = require("@nestjs/common");
@@ -15,9 +16,10 @@ const fhir_service_js_1 = require("../fhir/fhir.service.js");
 const config_1 = require("@nestjs/config");
 const client_cognito_identity_provider_1 = require("@aws-sdk/client-cognito-identity-provider");
 const aws_jwt_verify_1 = require("aws-jwt-verify");
-let AuthService = class AuthService {
+let AuthService = AuthService_1 = class AuthService {
     fhir;
     config;
+    logger = new common_1.Logger(AuthService_1.name);
     cognito;
     cognitoClientId;
     cognitoUserPoolId;
@@ -36,6 +38,7 @@ let AuthService = class AuthService {
         });
     }
     async register(dto) {
+        let cognitoUserCreated = false;
         try {
             await this.cognito.send(new client_cognito_identity_provider_1.AdminCreateUserCommand({
                 UserPoolId: this.cognitoUserPoolId,
@@ -51,6 +54,7 @@ let AuthService = class AuthService {
                 ],
                 MessageAction: 'SUPPRESS',
             }));
+            cognitoUserCreated = true;
             await this.cognito.send(new client_cognito_identity_provider_1.AdminSetUserPasswordCommand({
                 UserPoolId: this.cognitoUserPoolId,
                 Username: dto.email,
@@ -63,21 +67,32 @@ let AuthService = class AuthService {
             try {
                 const claims = await this.idVerifier.verify(tokens.idToken);
                 sub = claims?.sub || '';
+                if (!sub) {
+                    throw new common_1.InternalServerErrorException('Failed to extract user identifier from token');
+                }
             }
-            catch { }
+            catch (error) {
+                this.logger.error(`Failed to extract Cognito sub for user ${dto.email}`, error);
+                throw new common_1.InternalServerErrorException('Failed to verify authentication token');
+            }
             let fhirRef;
-            if (sub) {
+            try {
                 if (dto.role === 'PATIENT') {
                     const created = await this.fhir.create('Patient', {
                         resourceType: 'Patient',
                         identifier: [{ system: 'cognito:user-sub', value: sub }],
                         name: [{ family: dto.lastName, given: [dto.firstName] }],
+                        birthDate: dto.birthdate,
+                        gender: dto.gender,
                         telecom: [
                             { system: 'email', value: dto.email },
                             { system: 'phone', value: dto.phoneNumber },
                         ],
                     });
-                    fhirRef = `Patient/${created?.id}`;
+                    if (!created?.id) {
+                        throw new common_1.InternalServerErrorException('FHIR Patient resource created but no ID returned');
+                    }
+                    fhirRef = `Patient/${created.id}`;
                 }
                 else {
                     const created = await this.fhir.create('Practitioner', {
@@ -89,8 +104,27 @@ let AuthService = class AuthService {
                             { system: 'phone', value: dto.phoneNumber },
                         ],
                     });
-                    fhirRef = `Practitioner/${created?.id}`;
+                    if (!created?.id) {
+                        throw new common_1.InternalServerErrorException('FHIR Practitioner resource created but no ID returned');
+                    }
+                    fhirRef = `Practitioner/${created.id}`;
                 }
+            }
+            catch (error) {
+                this.logger.error(`Failed to create FHIR resource for user ${dto.email}`, error);
+                if (cognitoUserCreated) {
+                    try {
+                        await this.cognito.send(new client_cognito_identity_provider_1.AdminDeleteUserCommand({
+                            UserPoolId: this.cognitoUserPoolId,
+                            Username: dto.email,
+                        }));
+                        this.logger.log(`Rolled back Cognito user creation for ${dto.email}`);
+                    }
+                    catch (rollbackError) {
+                        this.logger.error(`Failed to rollback Cognito user for ${dto.email}`, rollbackError);
+                    }
+                }
+                throw new common_1.InternalServerErrorException('Failed to create user profile. Please try again.');
             }
             const userPayload = {
                 id: dto.email,
@@ -103,6 +137,13 @@ let AuthService = class AuthService {
             return { token: tokens.idToken, user: userPayload };
         }
         catch (e) {
+            if (e instanceof common_1.UnauthorizedException ||
+                e instanceof common_1.BadRequestException ||
+                e instanceof common_1.ConflictException ||
+                e instanceof common_1.ForbiddenException ||
+                e instanceof common_1.InternalServerErrorException) {
+                throw e;
+            }
             this.throwCognitoHttpError(e);
         }
     }
@@ -317,7 +358,7 @@ let AuthService = class AuthService {
     }
 };
 exports.AuthService = AuthService;
-exports.AuthService = AuthService = __decorate([
+exports.AuthService = AuthService = AuthService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [fhir_service_js_1.FhirService, config_1.ConfigService])
 ], AuthService);

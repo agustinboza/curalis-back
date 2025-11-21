@@ -17,6 +17,9 @@ let ProceduresService = class ProceduresService {
     constructor(fhir) {
         this.fhir = fhir;
     }
+    mapActions(actions) {
+        return actions?.map((a) => ({ title: a.title, description: a.description }));
+    }
     createTemplate(dto) {
         const planDefinition = {
             resourceType: 'PlanDefinition',
@@ -25,14 +28,14 @@ let ProceduresService = class ProceduresService {
             description: dto.description,
         };
         if (dto.actions?.length) {
-            planDefinition.action = dto.actions.map((a) => ({ title: a.title, description: a.description }));
+            planDefinition.action = this.mapActions(dto.actions);
         }
         return this.fhir.create('PlanDefinition', planDefinition);
     }
     async listTemplates() {
-        const bundle = await this.fhir.search('PlanDefinition', { status: 'active' });
+        const bundle = await this.fhir.search('PlanDefinition', {});
         const resources = (bundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
-        return resources;
+        return resources.filter((r) => (r?.status ?? 'active') === 'active');
     }
     getTemplate(id) {
         return this.fhir.read('PlanDefinition', id);
@@ -43,9 +46,7 @@ let ProceduresService = class ProceduresService {
             ...existing,
             title: dto.title ?? existing.title,
             description: dto.description ?? existing.description,
-            action: Array.isArray(dto.actions)
-                ? dto.actions.map((a) => ({ title: a.title, description: a.description }))
-                : existing.action,
+            action: Array.isArray(dto.actions) ? this.mapActions(dto.actions) : existing.action,
         };
         return this.fhir.update('PlanDefinition', id, updated);
     }
@@ -59,83 +60,61 @@ let ProceduresService = class ProceduresService {
             intent: 'plan',
             title: dto.title,
             subject: { reference: `Patient/${dto.patientId}` },
-            basedOn: [{ reference: `PlanDefinition/${dto.templateId}` }],
+            instantiatesCanonical: [`PlanDefinition/${dto.templateId}`],
             author: authorRef ? { reference: authorRef } : undefined,
         };
         if (dto.careTeamId) {
             carePlan.careTeam = [{ reference: `CareTeam/${dto.careTeamId}` }];
         }
-        return this.fhir.create('CarePlan', carePlan);
+        const createdCarePlan = await this.fhir.create('CarePlan', carePlan);
+        const carePlanId = createdCarePlan.id;
+        try {
+            const planDef = await this.fhir.read('PlanDefinition', dto.templateId);
+            const actions = planDef?.action || [];
+            const examPromises = actions
+                .map((action) => action.definitionCanonical)
+                .filter((canonical) => typeof canonical === 'string' && canonical.startsWith('ActivityDefinition/'))
+                .map((canonical) => {
+                const examTemplateId = canonical.split('/')[1];
+                return this.fhir.read('ActivityDefinition', examTemplateId)
+                    .then((ad) => {
+                    const dur = ad?.timingDuration;
+                    let computedDueDate;
+                    if (dur?.value && (dur?.code === 'd' || dur?.unit?.toLowerCase() === 'day' || dur?.unit?.toLowerCase() === 'days')) {
+                        const days = Number(dur.value) || 0;
+                        if (days > 0) {
+                            const now = new Date();
+                            now.setUTCDate(now.getUTCDate() + days);
+                            computedDueDate = now.toISOString();
+                        }
+                    }
+                    const serviceRequest = {
+                        resourceType: 'ServiceRequest',
+                        status: 'active',
+                        intent: 'order',
+                        subject: { reference: `Patient/${dto.patientId}` },
+                        instantiatesCanonical: [canonical],
+                        basedOn: [{ reference: `CarePlan/${carePlanId}` }],
+                        occurrenceDateTime: computedDueDate,
+                    };
+                    return this.fhir.create('ServiceRequest', serviceRequest);
+                })
+                    .catch((error) => {
+                    console.error(`Failed to create ServiceRequest for exam template ${examTemplateId}:`, error);
+                    return null;
+                });
+            });
+            await Promise.all(examPromises);
+        }
+        catch (error) {
+            console.error('Error creating exam ServiceRequests during procedure assignment:', error);
+        }
+        return createdCarePlan;
     }
-    getCarePlanById(id) {
+    async getCarePlanById(id) {
         return this.fhir.read('CarePlan', id);
     }
-    extractId(ref) {
-        if (!ref)
-            return undefined;
-        const parts = ref.split('/');
-        return parts[1];
-    }
-    async hydrateExam(sr, carePlanId) {
-        const templateCanonical = (sr.instantiatesCanonical ?? [])[0];
-        const templateId = templateCanonical?.startsWith('ActivityDefinition/') ? templateCanonical.split('/')[1] : undefined;
-        const template = templateId ? await this.fhir.read('ActivityDefinition', templateId) : undefined;
-        const resultsBundle = await this.fhir.search('DocumentReference', { related: `ServiceRequest/${sr.id}` });
-        const results = (resultsBundle?.entry ?? [])
-            .map((e) => e.resource)
-            .filter(Boolean)
-            .map((doc) => {
-            const att = doc?.content?.[0]?.attachment ?? {};
-            return {
-                id: doc.id,
-                examId: sr.id,
-                uploadedAt: doc.date || doc.meta?.lastUpdated,
-                fileUrl: att.url,
-                fileName: att.title,
-                fileType: att.contentType,
-                aiProcessed: false,
-                extractedData: undefined,
-            };
-        });
-        const type = template?.code?.coding?.[0]?.code || 'other';
-        const status = sr.status === 'completed' ? 'completed' : 'pending';
-        return {
-            id: sr.id,
-            procedureId: carePlanId,
-            examTemplate: { id: templateId, name: template?.name || 'Exam', type },
-            status,
-            prescriptionUrl: undefined,
-            results,
-            dueDate: sr.occurrenceDateTime,
-        };
-    }
-    async hydrateCarePlan(cp) {
-        const patientId = this.extractId(cp?.subject?.reference);
-        const basedOnRef = cp?.basedOn?.[0]?.reference;
-        const templateId = basedOnRef?.startsWith('PlanDefinition/') ? basedOnRef.split('/')[1] : undefined;
-        const planDef = templateId ? await this.fhir.read('PlanDefinition', templateId) : undefined;
-        const examsBundle = await this.fhir.search('ServiceRequest', { 'based-on': `CarePlan/${cp.id}` });
-        const srs = (examsBundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
-        const exams = await Promise.all(srs.map((sr) => this.hydrateExam(sr, cp.id)));
-        const status = cp.status === 'revoked' ? 'cancelled' : (cp.status || 'active');
-        const assignedByRef = cp?.author?.reference;
-        const assignedBy = assignedByRef ? { id: this.extractId(assignedByRef) } : undefined;
-        return {
-            id: cp.id,
-            patientId,
-            procedureTemplate: { id: templateId, name: planDef?.title || 'Procedure', description: planDef?.description },
-            assignedBy,
-            assignedAt: cp.created || cp.meta?.lastUpdated,
-            status,
-            assignedExams: exams,
-            prescriptionUrl: undefined,
-        };
-    }
-    async getHydratedCarePlanById(id) {
-        const cp = await this.fhir.read('CarePlan', id);
-        return this.hydrateCarePlan(cp);
-    }
-    async listAssigned(filters, hydrate = false) {
+    async listAssigned(filters) {
         const params = {};
         if (filters.patientId)
             params['subject'] = `Patient/${filters.patientId}`;
@@ -143,10 +122,7 @@ let ProceduresService = class ProceduresService {
             params['status'] = filters.status;
         const bundle = await this.fhir.search('CarePlan', params);
         const resources = (bundle?.entry ?? []).map((e) => e.resource).filter(Boolean);
-        if (!hydrate)
-            return resources;
-        const hydrated = await Promise.all(resources.map((cp) => this.hydrateCarePlan(cp)));
-        return hydrated;
+        return resources;
     }
     async versionCarePlan(oldCarePlanId, dto) {
         const oldCarePlan = await this.fhir.read('CarePlan', oldCarePlanId);
@@ -158,7 +134,7 @@ let ProceduresService = class ProceduresService {
             title: dto.title ?? oldCarePlan.title,
             description: dto.description ?? oldCarePlan.description,
             subject: oldCarePlan.subject,
-            basedOn: oldCarePlan.basedOn,
+            instantiatesCanonical: oldCarePlan.instantiatesCanonical,
             careTeam: oldCarePlan.careTeam,
             replaces: [{ reference: `CarePlan/${oldCarePlanId}` }],
         };

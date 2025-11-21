@@ -12,7 +12,7 @@ export declare class AuthController {
             email: string;
             firstName: string;
             lastName: string;
-            fhirRef: string | undefined;
+            fhirRef: string;
         };
     }>;
     login(dto: LoginDto): Promise<{

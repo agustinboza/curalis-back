@@ -6,6 +6,7 @@ import { UpdateTemplateDto } from './dto/update-template.dto.js';
 export declare class ProceduresService {
     private readonly fhir;
     constructor(fhir: FhirService);
+    private mapActions;
     createTemplate(dto: CreateTemplateDto): Promise<any>;
     listTemplates(): Promise<any>;
     getTemplate(id: string): Promise<unknown>;
@@ -13,28 +14,9 @@ export declare class ProceduresService {
     deleteTemplate(id: string): Promise<void>;
     assignToPatient(dto: AssignProcedureDto, authorRef?: string): Promise<any>;
     getCarePlanById(id: string): Promise<unknown>;
-    private extractId;
-    private hydrateExam;
-    private hydrateCarePlan;
-    getHydratedCarePlanById(id: string): Promise<{
-        id: any;
-        patientId: string | undefined;
-        procedureTemplate: {
-            id: string | undefined;
-            name: any;
-            description: any;
-        };
-        assignedBy: {
-            id: string | undefined;
-        } | undefined;
-        assignedAt: any;
-        status: any;
-        assignedExams: any[];
-        prescriptionUrl: undefined;
-    }>;
     listAssigned(filters: {
         patientId?: string;
         status?: string;
-    }, hydrate?: boolean): Promise<any>;
+    }): Promise<any>;
     versionCarePlan(oldCarePlanId: string, dto: VersionCarePlanDto): Promise<any>;
 }

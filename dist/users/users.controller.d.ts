@@ -7,22 +7,7 @@ export declare class UsersController {
     updateProfile(req: any, dto: UpdateProfileDto): Promise<any>;
     listPatients(): Promise<{
         success: boolean;
-        data: {
-            id: any;
-            email: string;
-            firstName: string;
-            lastName: string;
-            role: string;
-            consentStatus: {
-                digitalSignature: boolean;
-                emailVerified: boolean;
-                isComplete: boolean;
-            };
-            emailVerified: boolean;
-            weight: number;
-            height: number;
-            comorbidConditions: never[];
-        }[];
+        data: any[];
     }>;
     deleteLegacyPatients(): Promise<{
         success: boolean;

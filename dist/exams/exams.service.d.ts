@@ -8,6 +8,8 @@ export declare class ExamsService {
     private readonly fhir;
     constructor(fhir: FhirService);
     listTemplates(procedureTemplateId?: string): Promise<any>;
+    private createTimingDuration;
+    private createCodeCoding;
     createTemplate(dto: CreateExamTemplateDto): Promise<any>;
     getTemplate(id: string): Promise<unknown>;
     updateTemplate(id: string, dto: UpdateExamTemplateDto): Promise<any>;
@@ -19,37 +21,9 @@ export declare class ExamsService {
         patientId?: string;
         carePlanId?: string;
         status?: string;
-    }): Promise<any[]>;
-    getAssignedById(id: string): Promise<{
-        id: any;
-        patientId: string | undefined;
-        assignedProcedureId: string | undefined;
-        examTemplate: {
-            id: string | undefined;
-            name: any;
-            type: any;
-        };
-        status: string;
-        prescriptionUrl: undefined;
-        results: any;
-        dueDate: any;
-    }>;
-    updateAssignedStatus(id: string, dto: UpdateAssignedExamStatusDto): Promise<{
-        id: any;
-        patientId: string | undefined;
-        assignedProcedureId: string | undefined;
-        examTemplate: {
-            id: string | undefined;
-            name: any;
-            type: any;
-        };
-        status: string;
-        prescriptionUrl: undefined;
-        results: any;
-        dueDate: any;
-    }>;
+    }): Promise<any>;
+    getAssignedById(id: string): Promise<unknown>;
+    updateAssignedStatus(id: string, dto: UpdateAssignedExamStatusDto): Promise<any>;
     uploadResult(serviceRequestId: string, dto: UploadExamResultDto): Promise<any>;
     private mapClientStatusToFhir;
-    private extractId;
-    private hydrateServiceRequest;
 }

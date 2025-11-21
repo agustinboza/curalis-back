@@ -40,41 +40,15 @@ export declare class ExamsController {
     }>;
     listAssigned(patientId?: string, carePlanId?: string, status?: string): Promise<{
         success: boolean;
-        data: any[];
+        data: any;
     }>;
     getAssigned(id: string): Promise<{
         success: boolean;
-        data: {
-            id: any;
-            patientId: string | undefined;
-            assignedProcedureId: string | undefined;
-            examTemplate: {
-                id: string | undefined;
-                name: any;
-                type: any;
-            };
-            status: string;
-            prescriptionUrl: undefined;
-            results: any;
-            dueDate: any;
-        };
+        data: unknown;
     }>;
     updateAssignedStatus(id: string, dto: UpdateAssignedExamStatusDto): Promise<{
         success: boolean;
-        data: {
-            id: any;
-            patientId: string | undefined;
-            assignedProcedureId: string | undefined;
-            examTemplate: {
-                id: string | undefined;
-                name: any;
-                type: any;
-            };
-            status: string;
-            prescriptionUrl: undefined;
-            results: any;
-            dueDate: any;
-        };
+        data: any;
     }>;
     uploadResult(id: string, dto: UploadExamResultDto): Promise<{
         success: boolean;

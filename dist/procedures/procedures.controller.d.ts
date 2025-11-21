@@ -33,28 +33,17 @@ export declare class ProceduresController {
         success: boolean;
         data: any;
     }>;
+    getAssignedProcedure(id: string): Promise<{
+        success: boolean;
+        data: unknown;
+    }>;
     myProcedures(req: any): Promise<{
         success: boolean;
         data: any;
     }>;
     getMyProcedure(id: string): Promise<{
         success: boolean;
-        data: {
-            id: any;
-            patientId: string | undefined;
-            procedureTemplate: {
-                id: string | undefined;
-                name: any;
-                description: any;
-            };
-            assignedBy: {
-                id: string | undefined;
-            } | undefined;
-            assignedAt: any;
-            status: any;
-            assignedExams: any[];
-            prescriptionUrl: undefined;
-        };
+        data: unknown;
     }>;
     versionCarePlan(id: string, dto: VersionCarePlanDto): Promise<{
         success: boolean;
