@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { FhirService } from '../fhir/fhir.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
+import { PatientResponseDto } from './dto/patient-response.dto.js';
+import { ProfileStatsResponseDto } from './dto/profile-stats-response.dto.js';
 
 @Injectable()
 export class UsersService {
@@ -34,12 +36,47 @@ export class UsersService {
     return telecom?.find((t) => t.system === 'email')?.value;
   }
 
-  async listPatients() {
+  async listPatients(): Promise<PatientResponseDto[]> {
     const bundle: any = await this.fhir.search('Patient', {});
     const resources: any[] = (bundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
     const withSub = resources.filter((p: any) => (p?.identifier || []).some((id: any) => id?.system === 'cognito:user-sub' && id?.value));
-    // Return raw FHIR Patient resources
-    return withSub;
+    
+    // Transform to structured DTOs with active procedures count
+    return Promise.all(
+      withSub.map(async (patient: any): Promise<PatientResponseDto> => {
+        // Extract name
+        const nameObj = patient.name?.[0] || {};
+        const firstName = nameObj.given?.[0] || '';
+        const lastName = nameObj.family || '';
+        const name = `${firstName} ${lastName}`.trim() || 'Unknown';
+        
+        // Extract email
+        const email = this.pickEmail(patient.telecom) || '';
+        
+        // Determine status
+        const hasCognitoSub = patient.identifier?.some((id: any) => id.system === 'cognito:user-sub' && id.value);
+        const status: 'active' | 'inactive' = hasCognitoSub && email ? 'active' : 'inactive';
+        
+        // Count active procedures (CarePlans with status='active')
+        let activeProcedures = 0;
+        try {
+          const carePlanBundle: any = await this.fhir.search('CarePlan', { subject: `Patient/${patient.id}`, status: 'active' });
+          activeProcedures = (carePlanBundle?.entry ?? []).length;
+        } catch (error) {
+          console.error(`Error counting active procedures for patient ${patient.id}:`, error);
+        }
+        
+        return {
+          id: patient.id,
+          name,
+          email,
+          status,
+          lastVisit: undefined, // TODO: Calculate from appointments if needed
+          activeProcedures,
+          nextFollowUp: undefined, // TODO: Calculate from follow-ups if needed
+        };
+      })
+    );
   }
 
   async listClinicians() {
@@ -72,6 +109,32 @@ export class UsersService {
       }
     }
     return removed;
+  }
+
+  async getProfileStats(): Promise<ProfileStatsResponseDto> {
+    // Count patients (those with cognito identifier)
+    const patientsBundle: any = await this.fhir.search('Patient', {});
+    const patients: any[] = (patientsBundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+    const patientsWithSub = patients.filter((p: any) => 
+      (p?.identifier || []).some((id: any) => id?.system === 'cognito:user-sub' && id?.value)
+    );
+    const totalPatients = patientsWithSub.length;
+
+    // Count all CarePlans (procedures)
+    const carePlansBundle: any = await this.fhir.search('CarePlan', {});
+    const carePlans: any[] = (carePlansBundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+    const totalProcedures = carePlans.length;
+
+    // Count active CarePlans
+    const activeCarePlansBundle: any = await this.fhir.search('CarePlan', { status: 'active' });
+    const activeCarePlans: any[] = (activeCarePlansBundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+    const activeProcedures = activeCarePlans.length;
+
+    return {
+      totalPatients,
+      totalProcedures,
+      activeProcedures,
+    };
   }
 }
 

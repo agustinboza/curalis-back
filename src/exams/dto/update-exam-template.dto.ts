@@ -12,11 +12,6 @@ export class UpdateExamTemplateDto {
   @IsOptional()
   @IsString()
   description?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  defaultDueDays?: number;
 }
 
 

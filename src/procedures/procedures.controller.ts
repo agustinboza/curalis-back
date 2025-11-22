@@ -47,18 +47,33 @@ export class ProceduresController {
   @Roles(Role.DOCTOR)
   assignToPatient(@Body() dto: AssignProcedureDto, @Request() req: any) {
     const authorRef: string | undefined = req?.user?.fhirRef;
-    return this.proceduresService.assignToPatient(dto, authorRef).then((data) => ({ success: true, data }));
+    return this.proceduresService.assignToPatient(dto, authorRef).then(() => ({ success: true }));
   }
 
   @Get('assigned')
-  listAssigned(@Query('patientId') patientId?: string, @Query('status') status?: string) {
-    return this.proceduresService.listAssigned({ patientId, status }).then((data) => ({ success: true, data }));
+  listAssigned(@Query('patientId') patientId?: string) {
+    if (!patientId) {
+      return Promise.resolve({ success: false, error: 'patientId is required' });
+    }
+    return this.proceduresService.listAssignedForPatient(patientId).then((data) => ({ success: true, data }));
   }
 
   @Get('assigned/:id')
   @Roles(Role.DOCTOR)
   getAssignedProcedure(@Param('id') id: string) {
-    return this.proceduresService.getCarePlanById(id).then((data) => ({ success: true, data }));
+    return this.proceduresService.getAssignedProcedureDetail(id).then((data) => ({ success: true, data }));
+  }
+
+  @Get('assigned/:id/overview')
+  @Roles(Role.DOCTOR)
+  getAssignedProcedureOverview(@Param('id') id: string) {
+    return this.proceduresService.getAssignedProcedureOverview(id).then((data) => ({ success: true, data }));
+  }
+
+  @Get('assigned/:id/exam-results')
+  @Roles(Role.DOCTOR)
+  getAssignedProcedureExamResults(@Param('id') id: string) {
+    return this.proceduresService.getAssignedProcedureExamResults(id).then((data) => ({ success: true, data }));
   }
 
   @Get('my-procedures')

@@ -46,6 +46,14 @@ export class UsersController {
     const data = await this.users.listClinicians();
     return { success: true, data };
   }
+
+  @Get('profile/stats')
+  @UseGuards(RolesGuard)
+  @Roles(Role.DOCTOR)
+  async getProfileStats() {
+    const data = await this.users.getProfileStats();
+    return { success: true, data };
+  }
 }
 
 

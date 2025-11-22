@@ -12,12 +12,6 @@ export class CreateExamTemplateDto {
   @IsOptional()
   @IsString()
   description?: string;
-
-  // default due in days for assigned exams if not provided explicitly
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  defaultDueDays?: number;
 }
 
 

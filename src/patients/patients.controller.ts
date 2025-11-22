@@ -20,4 +20,16 @@ export class PatientsController {
   getById(@Param('id') id: string) {
     return this.patientsService.getById(id);
   }
+
+  @Get(':id/overview')
+  @Roles(Role.DOCTOR)
+  getOverview(@Param('id') id: string) {
+    return this.patientsService.getOverview(id).then((data) => ({ success: true, data }));
+  }
+
+  @Get(':id/follow-ups')
+  @Roles(Role.DOCTOR)
+  getFollowUps(@Param('id') id: string) {
+    return this.patientsService.getFollowUps(id).then((data) => ({ success: true, data }));
+  }
 }

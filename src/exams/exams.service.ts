@@ -5,35 +5,45 @@ import { UpdateExamTemplateDto } from './dto/update-exam-template.dto.js';
 import { AssignExamDto } from './dto/assign-exam.dto.js';
 import { UpdateAssignedExamStatusDto } from './dto/update-assigned-exam-status.dto.js';
 import { UploadExamResultDto } from './dto/upload-exam-result.dto.js';
+import { ExamTemplateResponseDto } from '../procedures/dto/exam-template-response.dto.js';
+import { ExamResultResponseDto } from '../procedures/dto/exam-result-response.dto.js';
 
 @Injectable()
 export class ExamsService {
   constructor(private readonly fhir: FhirService) {}
 
-  async listTemplates(procedureTemplateId?: string) {
+  async listTemplates(procedureTemplateId?: string): Promise<ExamTemplateResponseDto[]> {
+    let activityDefinitions: any[];
+    
     if (!procedureTemplateId) {
+      // Get all exam templates
       const bundle: any = await this.fhir.search('ActivityDefinition', {} as any);
-      return (bundle?.entry ?? []).map((e: any) => e.resource).filter((r: any) => (r?.status ?? 'active') === 'active');
+      activityDefinitions = (bundle?.entry ?? [])
+        .map((e: any) => e.resource)
+        .filter((r: any) => (r?.status ?? 'active') === 'active');
+    } else {
+      // Get exam templates linked to a specific procedure template
+      const plan: any = await this.fhir.read('PlanDefinition', procedureTemplateId);
+      const definitionCanonicals = (plan?.action ?? [])
+        .map((a: any) => a.definitionCanonical)
+        .filter((v: any) => typeof v === 'string');
+      const ids = definitionCanonicals
+        .map((c: string) => (c.startsWith('ActivityDefinition/') ? c.split('/')[1] : undefined))
+        .filter(Boolean) as string[];
+      activityDefinitions = await Promise.all(ids.map((id) => this.fhir.read<any>('ActivityDefinition', id)));
     }
-    const plan: any = await this.fhir.read('PlanDefinition', procedureTemplateId);
-    const definitionCanonicals = (plan?.action ?? [])
-      .map((a: any) => a.definitionCanonical)
-      .filter((v: any) => typeof v === 'string');
-    const ids = definitionCanonicals
-      .map((c: string) => (c.startsWith('ActivityDefinition/') ? c.split('/')[1] : undefined))
-      .filter(Boolean) as string[];
-    return Promise.all(ids.map((id) => this.fhir.read<any>('ActivityDefinition', id)));
-  }
-
-  private createTimingDuration(days?: number) {
-    return days
-      ? {
-          value: days,
-          unit: 'day',
-          system: 'http://unitsofmeasure.org',
-          code: 'd',
-        }
-      : undefined;
+    
+    // Transform to structured DTOs
+    return activityDefinitions.map((ad: any): ExamTemplateResponseDto => {
+      const type = ad?.code?.coding?.[0]?.code;
+      
+      return {
+        id: ad.id,
+        name: ad.name || '',
+        type,
+        description: ad.description,
+      };
+    });
   }
 
   private createCodeCoding(type?: string) {
@@ -50,7 +60,7 @@ export class ExamsService {
       : undefined;
   }
 
-  createTemplate(dto: CreateExamTemplateDto) {
+  async createTemplate(dto: CreateExamTemplateDto): Promise<ExamTemplateResponseDto> {
     const activityDefinition: any = {
       resourceType: 'ActivityDefinition',
       status: 'active',
@@ -58,9 +68,17 @@ export class ExamsService {
       description: dto.description,
       kind: 'ServiceRequest',
       code: this.createCodeCoding(dto.type),
-      timingDuration: this.createTimingDuration(dto.defaultDueDays),
     };
-    return this.fhir.create('ActivityDefinition', activityDefinition);
+    const created = await this.fhir.create('ActivityDefinition', activityDefinition);
+    
+    // Return structured DTO
+    const type = created?.code?.coding?.[0]?.code;
+    return {
+      id: created.id,
+      name: created.name || '',
+      type,
+      description: created.description,
+    };
   }
 
   getTemplate(id: string) {
@@ -74,12 +92,11 @@ export class ExamsService {
       name: dto.name ?? existing.name,
       description: dto.description ?? existing.description,
       code: dto.type !== undefined ? this.createCodeCoding(dto.type) : existing.code,
-      timingDuration: dto.defaultDueDays !== undefined ? this.createTimingDuration(dto.defaultDueDays) : existing.timingDuration,
     };
     return this.fhir.update('ActivityDefinition', id, updated);
   }
 
-  async deleteTemplate(id: string) {
+  async deleteTemplate(id: string): Promise<void> {
     const canonical = `ActivityDefinition/${id}`;
     // 1) Unlink from any PlanDefinitions that reference this ActivityDefinition
     const plansBundle: any = await this.fhir.search('PlanDefinition', {} as any);
@@ -103,10 +120,10 @@ export class ExamsService {
     }
 
     // 3) Delete the ActivityDefinition
-    return this.fhir.delete('ActivityDefinition', id);
+    await this.fhir.delete('ActivityDefinition', id);
   }
 
-  async linkTemplateToProcedure(examTemplateId: string, procedureTemplateId: string) {
+  async linkExamTemplateToProcedureTemplate(examTemplateId: string, procedureTemplateId: string): Promise<ExamTemplateResponseDto> {
     const plan: any = await this.fhir.read('PlanDefinition', procedureTemplateId);
     const canonical = `ActivityDefinition/${examTemplateId}`;
     const actions: any[] = Array.isArray(plan?.action) ? [...plan.action] : [];
@@ -114,41 +131,36 @@ export class ExamsService {
     if (!exists) {
       actions.push({ definitionCanonical: canonical });
     } else {
-      // Prevent duplicate linking
       throw new ConflictException('Exam template already linked to this procedure template');
     }
     const updated: any = { ...plan, action: actions };
-    return this.fhir.update('PlanDefinition', procedureTemplateId, updated);
+    await this.fhir.update('PlanDefinition', procedureTemplateId, updated);
+    
+    // Read and return the exam template as structured DTO
+    const activityDef: any = await this.fhir.read('ActivityDefinition', examTemplateId);
+    
+    // Extract exam type from code.coding
+    const type = activityDef?.code?.coding?.[0]?.code;
+    
+    return {
+      id: activityDef.id,
+      name: activityDef.name || '',
+      type,
+      description: activityDef.description,
+    };
   }
 
-  async unlinkTemplateFromProcedure(examTemplateId: string, procedureTemplateId: string) {
+  async unlinkExamTemplateFromProcedureTemplate(examTemplateId: string, procedureTemplateId: string): Promise<void> {
     const plan: any = await this.fhir.read('PlanDefinition', procedureTemplateId);
     const canonical = `ActivityDefinition/${examTemplateId}`;
     const actions: any[] = (plan?.action ?? []).filter((a: any) => a.definitionCanonical !== canonical);
     const updated: any = { ...plan, action: actions };
-    return this.fhir.update('PlanDefinition', procedureTemplateId, updated);
+    await this.fhir.update('PlanDefinition', procedureTemplateId, updated);
   }
 
-  async assignExam(dto: AssignExamDto) {
+  async assignExamToAssignedProcedure(dto: AssignExamDto): Promise<ExamResultResponseDto> {
     const carePlanId = dto.carePlanId ?? dto.assignedProcedureId;
-    // If dueDate not provided, try to derive from template timingDuration
-    let computedDueDate: string | undefined = dto.dueDate;
-    if (!computedDueDate) {
-      try {
-        const ad: any = await this.fhir.read('ActivityDefinition', dto.examTemplateId);
-        const dur = ad?.timingDuration;
-        if (dur?.value && (dur?.code === 'd' || dur?.unit?.toLowerCase() === 'day' || dur?.unit?.toLowerCase() === 'days')) {
-          const days = Number(dur.value) || 0;
-          if (days > 0) {
-            const now = new Date();
-            now.setUTCDate(now.getUTCDate() + days);
-            computedDueDate = now.toISOString();
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
+    const computedDueDate: string | undefined = dto.dueDate;
 
     const serviceRequest: any = {
       resourceType: 'ServiceRequest',
@@ -161,7 +173,32 @@ export class ExamsService {
       note: dto.notes ? [{ text: dto.notes }] : undefined,
       supportingInfo: dto.appointmentId ? [{ reference: `Appointment/${dto.appointmentId}` }] : undefined,
     };
-    return this.fhir.create('ServiceRequest', serviceRequest);
+    
+    const created = await this.fhir.create('ServiceRequest', serviceRequest);
+    
+    // Fetch ActivityDefinition to get exam name and type
+    let examName = 'Unknown Exam';
+    let examType: 'blood_test' | 'imaging' | 'other' = 'other';
+    
+    try {
+      const activityDef: any = await this.fhir.read('ActivityDefinition', dto.examTemplateId);
+      examName = activityDef.name || 'Unknown Exam';
+      const code = activityDef.code?.coding?.[0]?.code?.toLowerCase() || 'other';
+      examType = (code === 'blood_test' || code === 'imaging' ? code : 'other') as 'blood_test' | 'imaging' | 'other';
+    } catch (error) {
+      console.error(`Error fetching ActivityDefinition ${dto.examTemplateId}:`, error);
+    }
+
+    return {
+      id: created.id,
+      examName,
+      type: examType,
+      status: created.status || 'active',
+      uploadedAt: created.occurrenceDateTime,
+      fileName: undefined,
+      aiProcessed: false,
+      extractedData: undefined,
+    };
   }
 
   async listAssigned(filters: { patientId?: string; carePlanId?: string; status?: string }) {

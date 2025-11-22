@@ -50,7 +50,7 @@ export class ExamsController {
     @Param('examTemplateId') examTemplateId: string,
     @Param('procedureTemplateId') procedureTemplateId: string,
   ) {
-    return this.exams.linkTemplateToProcedure(examTemplateId, procedureTemplateId).then((data) => ({ success: true, data }));
+    return this.exams.linkExamTemplateToProcedureTemplate(examTemplateId, procedureTemplateId).then((data) => ({ success: true, data }));
   }
 
   @Delete('templates/:examTemplateId/unlink/:procedureTemplateId')
@@ -59,13 +59,13 @@ export class ExamsController {
     @Param('examTemplateId') examTemplateId: string,
     @Param('procedureTemplateId') procedureTemplateId: string,
   ) {
-    return this.exams.unlinkTemplateFromProcedure(examTemplateId, procedureTemplateId).then((data) => ({ success: true, data }));
+    return this.exams.unlinkExamTemplateFromProcedureTemplate(examTemplateId, procedureTemplateId).then(() => ({ success: true }));
   }
 
   @Post('assign')
   @Roles(Role.DOCTOR)
-  assign(@Body() dto: AssignExamDto) {
-    return this.exams.assignExam(dto).then((data) => ({ success: true, data }));
+  assignExamToAssignedProcedure(@Body() dto: AssignExamDto) {
+    return this.exams.assignExamToAssignedProcedure(dto).then((data) => ({ success: true, data }));
   }
 
   @Get('assigned')
