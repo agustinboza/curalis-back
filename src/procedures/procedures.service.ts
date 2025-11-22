@@ -11,6 +11,7 @@ import { AssignedProcedureResponseDto } from './dto/assigned-procedure-response.
 import { AssignedProcedureDetailResponseDto } from './dto/assigned-procedure-detail-response.dto.js';
 import { AssignedProcedureOverviewResponseDto } from './dto/assigned-procedure-overview-response.dto.js';
 import { ExamResultResponseDto } from './dto/exam-result-response.dto.js';
+import { PatientProcedureResponseDto, PatientProcedureExamDto } from './dto/patient-procedure-response.dto.js';
 
 @Injectable()
 export class ProceduresService {
@@ -317,6 +318,162 @@ export class ProceduresService {
     const bundle: any = await this.fhir.search('CarePlan', params);
     const resources = (bundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
     return resources;
+  }
+
+  async listPatientProcedures(patientId: string): Promise<PatientProcedureResponseDto[]> {
+    try {
+      console.log(`[listPatientProcedures] Searching for CarePlans with subject: Patient/${patientId}`);
+      let bundle: any;
+      try {
+        bundle = await this.fhir.search('CarePlan', { subject: `Patient/${patientId}` });
+        console.log(`[listPatientProcedures] Found ${bundle?.entry?.length || 0} CarePlan entries`);
+      } catch (error) {
+        console.error(`[listPatientProcedures] Error searching CarePlans for patient ${patientId}:`, error);
+        return []; // Return empty array instead of throwing
+      }
+      
+      const carePlans = (bundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+      console.log(`[listPatientProcedures] Processing ${carePlans.length} CarePlans`);
+      
+      if (carePlans.length === 0) {
+        console.log(`[listPatientProcedures] No CarePlans found for patient ${patientId}`);
+        return [];
+      }
+      
+      return await Promise.all(
+        carePlans.map(async (carePlan: any): Promise<PatientProcedureResponseDto> => {
+        try {
+          // Extract template ID from instantiatesCanonical
+          const templateCanonical = carePlan.instantiatesCanonical?.[0];
+          const templateId = templateCanonical?.startsWith('PlanDefinition/') 
+            ? templateCanonical.split('/')[1] 
+            : undefined;
+
+          // Fetch PlanDefinition to get template name and description
+          let templateName = 'Procedure';
+          let templateDescription: string | undefined;
+          if (templateId) {
+            try {
+              const planDef: any = await this.fhir.read('PlanDefinition', templateId);
+              templateName = planDef.title || planDef.name || 'Procedure';
+              templateDescription = planDef.description;
+            } catch (error) {
+              console.error(`[listPatientProcedures] Error fetching PlanDefinition ${templateId}:`, error);
+            }
+          }
+        
+          // Fetch ServiceRequests (exams) linked to this CarePlan
+          let exams: any[] = [];
+          try {
+            const examsBundle: any = await this.fhir.search('ServiceRequest', { 'based-on': `CarePlan/${carePlan.id}` });
+            exams = (examsBundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+          } catch (error) {
+            console.error(`[listPatientProcedures] Error fetching exams for CarePlan ${carePlan.id}:`, error);
+          }
+
+          // Transform exams to PatientProcedureExamDto
+          const examDtos: PatientProcedureExamDto[] = await Promise.all(
+            exams.map(async (exam: any): Promise<PatientProcedureExamDto> => {
+              // Extract ActivityDefinition ID from instantiatesCanonical
+              const activityCanonical = exam.instantiatesCanonical?.[0];
+              const activityId = activityCanonical?.startsWith('ActivityDefinition/') 
+                ? activityCanonical.split('/')[1] 
+                : undefined;
+
+              // Fetch ActivityDefinition to get exam name and type
+              let examName = 'Unknown Exam';
+              let examType: 'blood_test' | 'imaging' | 'other' = 'other';
+              
+              if (activityId) {
+                try {
+                  const activityDef: any = await this.fhir.read('ActivityDefinition', activityId);
+                  examName = activityDef.name || 'Unknown Exam';
+                  const code = activityDef.code?.coding?.[0]?.code?.toLowerCase() || 'other';
+                  examType = (code === 'blood_test' || code === 'imaging' ? code : 'other') as 'blood_test' | 'imaging' | 'other';
+                } catch (error) {
+                  console.error(`[listPatientProcedures] Error fetching ActivityDefinition ${activityId}:`, error);
+                }
+              }
+
+              // TODO: Fetch DocumentReference for results if needed
+              return {
+                id: exam.id,
+                examName,
+                type: examType,
+                status: exam.status || 'draft',
+                dueDate: exam.occurrenceDateTime,
+                uploadedAt: undefined, // TODO: Get from DocumentReference
+                fileName: undefined, // TODO: Get from DocumentReference
+                aiProcessed: false, // TODO: Get from DocumentReference
+                extractedData: undefined, // TODO: Get from DocumentReference
+              };
+            })
+          );
+
+          // Count completed exams
+          const completedExams = examDtos.filter((e) => e.status === 'completed').length;
+          const totalExams = examDtos.length;
+          const progress = totalExams > 0 
+            ? Math.min(100, Math.round((completedExams / totalExams) * 100))
+            : 0;
+
+          // Get assigned by (author) information
+          let assignedBy: { id: string; firstName: string; lastName: string } | undefined;
+          if (carePlan.author?.reference) {
+            const authorRef = carePlan.author.reference;
+            if (authorRef.startsWith('Practitioner/')) {
+              const practitionerId = authorRef.split('/')[1];
+              try {
+                const practitioner: any = await this.fhir.read('Practitioner', practitionerId);
+                const name = practitioner.name?.[0] || {};
+                assignedBy = {
+                  id: practitionerId,
+                  firstName: name.given?.[0] || '',
+                  lastName: name.family || '',
+                };
+              } catch (error) {
+                console.error(`[listPatientProcedures] Error fetching Practitioner ${practitionerId}:`, error);
+              }
+            }
+          }
+
+          const assignedAt = carePlan.created || carePlan.meta?.lastUpdated || new Date().toISOString();
+          
+          return {
+            id: carePlan.id,
+            name: templateName,
+            description: templateDescription,
+            status: carePlan.status || 'active',
+            assignedDate: new Date(assignedAt).toISOString().split('T')[0],
+            assignedBy,
+            progress,
+            totalExams,
+            completedExams,
+            exams: examDtos,
+          };
+        } catch (error) {
+          console.error(`[listPatientProcedures] Error processing CarePlan ${carePlan?.id}:`, error);
+          // Return a minimal procedure DTO to prevent the entire list from failing
+          const assignedAt = carePlan?.created || carePlan?.meta?.lastUpdated || new Date().toISOString();
+          return {
+            id: carePlan?.id || 'unknown',
+            name: 'Procedure',
+            description: undefined,
+            status: carePlan?.status || 'active',
+            assignedDate: new Date(assignedAt).toISOString().split('T')[0],
+            assignedBy: undefined,
+            progress: 0,
+            totalExams: 0,
+            completedExams: 0,
+            exams: [],
+          };
+        }
+        })
+      );
+    } catch (error) {
+      console.error(`[listPatientProcedures] Unexpected error processing procedures for patient ${patientId}:`, error);
+      return []; // Return empty array on any unexpected error
+    }
   }
 
   async listAssignedForPatient(patientId: string): Promise<AssignedProcedureResponseDto[]> {

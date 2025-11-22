@@ -51,15 +51,40 @@ export class ProceduresController {
   }
 
   @Get('assigned')
-  listAssigned(@Query('patientId') patientId?: string) {
+  listAssigned(@Query('patientId') patientId?: string, @Request() req?: any) {
     if (!patientId) {
       return Promise.resolve({ success: false, error: 'patientId is required' });
     }
-    return this.proceduresService.listAssignedForPatient(patientId).then((data) => ({ success: true, data }));
+    
+    // Check if caller is a patient (same pattern as profile stats)
+    const userRoles: string[] = req?.user?.roles || [];
+    const isPatient = !userRoles.includes('DOCTOR');
+    
+    if (isPatient) {
+      // For patients, return detailed DTO with exams array
+      // Extract actual patient ID from fhirRef if available
+      let actualPatientId: string | undefined;
+      if (req?.user?.fhirRef) {
+        const parts = req.user.fhirRef.split('/');
+        if (parts.length === 2 && parts[0] === 'Patient' && parts[1] && parts[1] !== 'profile') {
+          actualPatientId = parts[1];
+        }
+      }
+      const finalPatientId = actualPatientId || patientId;
+      
+      return this.proceduresService.listPatientProcedures(finalPatientId)
+        .then((data) => ({ success: true, data }))
+        .catch((error) => {
+          console.error(`[listAssigned] Error fetching patient procedures:`, error);
+          return { success: false, error: error?.message || 'Failed to fetch procedures', data: [] };
+        });
+    } else {
+      // For doctors, return simpler DTO
+      return this.proceduresService.listAssignedForPatient(patientId).then((data) => ({ success: true, data }));
+    }
   }
 
   @Get('assigned/:id')
-  @Roles(Role.DOCTOR)
   getAssignedProcedure(@Param('id') id: string) {
     return this.proceduresService.getAssignedProcedureDetail(id).then((data) => ({ success: true, data }));
   }
@@ -76,15 +101,11 @@ export class ProceduresController {
     return this.proceduresService.getAssignedProcedureExamResults(id).then((data) => ({ success: true, data }));
   }
 
-  @Get('my-procedures')
-  myProcedures(@Request() req: any) {
-    const roles: string[] = req.user?.roles ?? [];
-    const fhirRef: string | undefined = req.user?.fhirRef;
-    const isPatient = roles.includes(Role.PATIENT);
-    const patientId = isPatient && typeof fhirRef === 'string' && fhirRef.startsWith('Patient/')
-      ? fhirRef.split('/')[1]
-      : undefined;
-    return this.proceduresService.listAssigned({ patientId }).then((data) => ({ success: true, data }));
+  // Legacy endpoint - kept for backward compatibility but redirects to /assigned
+  @Get('my-procedures/:patientId')
+  myProcedures(@Param('patientId') patientId: string, @Request() req: any) {
+    // Redirect to the standard /assigned endpoint
+    return this.listAssigned(patientId, req);
   }
 
   @Get('my-procedures/:id')

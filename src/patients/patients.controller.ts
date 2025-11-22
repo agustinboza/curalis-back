@@ -32,4 +32,11 @@ export class PatientsController {
   getFollowUps(@Param('id') id: string) {
     return this.patientsService.getFollowUps(id).then((data) => ({ success: true, data }));
   }
+
+  @Get()
+  @Roles(Role.DOCTOR)
+  async listPatients() {
+    const data = await this.patientsService.listPatients();
+    return { success: true, data };
+  }
 }

@@ -3,6 +3,7 @@ import { FhirService } from '../fhir/fhir.service.js';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { PatientOverviewResponseDto } from './dto/patient-overview-response.dto.js';
 import { FollowUpResponseDto } from './dto/follow-up-response.dto.js';
+import { PatientResponseDto } from './dto/patient-response.dto.js';
 
 @Injectable()
 export class PatientsService {
@@ -88,5 +89,68 @@ export class PatientsService {
         wellnessScore: undefined,
       },
     ];
+  }
+
+  async listPatients(): Promise<PatientResponseDto[]> {
+    const bundle: any = await this.fhir.search('Patient', {});
+    const resources: any[] = (bundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+    const withSub = resources.filter((p: any) => (p?.identifier || []).some((id: any) => id?.system === 'cognito:user-sub' && id?.value));
+    
+    // Transform to structured DTOs with active procedures count
+    return Promise.all(
+      withSub.map(async (patient: any): Promise<PatientResponseDto> => {
+        // Extract name
+        const nameObj = patient.name?.[0] || {};
+        const firstName = nameObj.given?.[0] || '';
+        const lastName = nameObj.family || '';
+        const name = `${firstName} ${lastName}`.trim() || 'Unknown';
+        
+        // Extract email
+        const email = this.pickEmail(patient.telecom) || '';
+        
+        // Determine status
+        const hasCognitoSub = patient.identifier?.some((id: any) => id.system === 'cognito:user-sub' && id.value);
+        const status: 'active' | 'inactive' = hasCognitoSub && email ? 'active' : 'inactive';
+        
+        // Count active procedures (CarePlans with status='active')
+        let activeProcedures = 0;
+        try {
+          const carePlanBundle: any = await this.fhir.search('CarePlan', { subject: `Patient/${patient.id}`, status: 'active' });
+          activeProcedures = (carePlanBundle?.entry ?? []).length;
+        } catch (error) {
+          console.error(`Error counting active procedures for patient ${patient.id}:`, error);
+        }
+        
+        return {
+          id: patient.id,
+          name,
+          email,
+          status,
+          lastVisit: undefined, // TODO: Calculate from appointments if needed
+          activeProcedures,
+          nextFollowUp: undefined, // TODO: Calculate from follow-ups if needed
+        };
+      })
+    );
+  }
+
+  async deleteLegacyPatients(): Promise<number> {
+    const bundle: any = await this.fhir.search('Patient', {});
+    const resources: any[] = (bundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+    const legacy = resources.filter((p: any) => !((p?.identifier || []).some((id: any) => id?.system === 'cognito:user-sub' && id?.value)));
+    let removed = 0;
+    for (const p of legacy) {
+      try {
+        await this.fhir.delete('Patient', p.id);
+        removed++;
+      } catch {
+        // ignore deletion failures for now
+      }
+    }
+    return removed;
+  }
+
+  private pickEmail(telecom?: Array<{ system?: string; value?: string }>): string | undefined {
+    return telecom?.find((t) => t.system === 'email')?.value;
   }
 }

@@ -20,6 +20,12 @@ export class DoctorsController {
   getSchedule(@Param('id') practitionerId: string) {
     return this.doctorsService.getSchedule(practitionerId);
   }
+
+  @Get()
+  async listClinicians() {
+    const data = await this.doctorsService.listClinicians();
+    return { success: true, data };
+  }
 }
 
 

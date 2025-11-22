@@ -6,6 +6,7 @@ import { AssignExamDto } from './dto/assign-exam.dto.js';
 import { UpdateAssignedExamStatusDto } from './dto/update-assigned-exam-status.dto.js';
 import { UploadExamResultDto } from './dto/upload-exam-result.dto.js';
 import { ExamTemplateResponseDto } from '../procedures/dto/exam-template-response.dto.js';
+import { AssignedExamDetailResponseDto } from './dto/assigned-exam-detail-response.dto.js';
 import { ExamResultResponseDto } from '../procedures/dto/exam-result-response.dto.js';
 
 @Injectable()
@@ -211,8 +212,82 @@ export class ExamsService {
     return srs;
   }
 
-  async getAssignedById(id: string) {
-    return this.fhir.read('ServiceRequest', id);
+  async getAssignedById(id: string): Promise<AssignedExamDetailResponseDto> {
+    const serviceRequest: any = await this.fhir.read('ServiceRequest', id);
+    
+    // Extract ActivityDefinition ID from instantiatesCanonical
+    const activityCanonical = serviceRequest.instantiatesCanonical?.[0];
+    const activityId = activityCanonical?.startsWith('ActivityDefinition/') 
+      ? activityCanonical.split('/')[1] 
+      : undefined;
+
+    // Fetch ActivityDefinition to get exam name, description, and type
+    let examName = 'Unknown Exam';
+    let examDescription: string | undefined;
+    let examType: 'blood_test' | 'imaging' | 'other' = 'other';
+    
+    if (activityId) {
+      try {
+        const activityDef: any = await this.fhir.read('ActivityDefinition', activityId);
+        examName = activityDef.name || 'Unknown Exam';
+        examDescription = activityDef.description;
+        const code = activityDef.code?.coding?.[0]?.code?.toLowerCase() || 'other';
+        examType = (code === 'blood_test' || code === 'imaging' ? code : 'other') as 'blood_test' | 'imaging' | 'other';
+      } catch (error) {
+        console.error(`Error fetching ActivityDefinition ${activityId}:`, error);
+      }
+    }
+
+    // Fetch DocumentReferences (uploaded results) for this ServiceRequest
+    const uploadedResultsArray: Array<{
+      id: string;
+      uploadedAt: string;
+      fileUrl: string;
+      fileName: string;
+      fileType: string;
+      aiProcessed: boolean;
+      extractedData?: Record<string, any>;
+    }> = [];
+    try {
+      // Get patient ID from ServiceRequest to search by subject
+      const patientRef = serviceRequest.subject?.reference;
+      if (patientRef) {
+        // Search DocumentReferences by patient, then filter by context.related
+        const docRefBundle: any = await this.fhir.search('DocumentReference', { 
+          subject: patientRef 
+        });
+        const allDocRefs = (docRefBundle?.entry ?? []).map((e: any) => e.resource).filter(Boolean);
+        
+        // Filter to only those related to this ServiceRequest
+        const serviceRequestRef = `ServiceRequest/${id}`;
+        const docRefs = allDocRefs.filter((docRef: any) => 
+          docRef.context?.related?.some((rel: any) => rel.reference === serviceRequestRef)
+        );
+        
+        uploadedResultsArray.push(...docRefs.map((docRef: any) => ({
+          id: docRef.id,
+          uploadedAt: docRef.date || docRef.meta?.lastUpdated || new Date().toISOString(),
+          fileUrl: docRef.content?.[0]?.attachment?.url || '',
+          fileName: docRef.content?.[0]?.attachment?.title || docRef.description || 'Unknown file',
+          fileType: docRef.content?.[0]?.attachment?.contentType || 'application/octet-stream',
+          aiProcessed: false, // TODO: Extract from extension if available
+          extractedData: undefined, // TODO: Extract from extension if available
+        })));
+      }
+    } catch (error) {
+      console.error(`Error fetching DocumentReferences for ServiceRequest ${id}:`, error);
+    }
+
+    return {
+      id: serviceRequest.id,
+      examName,
+      description: examDescription,
+      type: examType,
+      status: serviceRequest.status || 'active',
+      dueDate: serviceRequest.occurrenceDateTime,
+      uploadedResults: uploadedResultsArray.length > 0 ? uploadedResultsArray : undefined,
+      prescriptionUrl: undefined, // TODO: Extract from extension if available
+    };
   }
 
   async updateAssignedStatus(id: string, dto: UpdateAssignedExamStatusDto) {
